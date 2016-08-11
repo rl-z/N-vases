@@ -1,0 +1,121 @@
+---
+title: "CatchUp_2a"
+output: html_document
+date: "`r format(Sys.time(), '%a %b %d %X %Y')`"
+author: RZ
+
+note: run catchup_2.cpp first to create data
+---
+```{r,include=FALSE}
+rm(list=ls())
+gc()
+options(warn=-1)
+```
+Reference article is [Analysis of hash-rate double spending](https://arxiv.org/pdf/1402.2009.pdf)
+
+We simulate the situation where we have:
+
+a. one **attacker** and one (honest) **miner**
+b. a number of **chains** (of **blocks**)
+c. The **hashing power** for the miner is given by miner.hashpower in the range: 1,2,... 100. The hashing power of the attacker is: *attacker.hashpower = 100 - miner.hashpower*
+
+The attacker has a **backlog** of a certain number of blocks and has to **catch up** with the miner (backlog=0). We say: the attacker 'wins'.
+Since we simulate we have to define:
+
+d. a point in time to **stop trying to catch up** (max.time)
+e. a number of **iterations** (iterations) for the simulation. Increasing this number gives a better estimation of the attacker's expected win chance due to (weak) [Law of The Large Numbers](https://en.wikipedia.org/wiki/Law_of_large_numbers).
+
+
+##### **CHAPTER ESTIMATED WIN CHANCES (EWC) AND CONFIDENCE INTERVALS**
+
+```{r,echo=FALSE,include=FALSE}
+gc()
+rm(list=ls())
+```
+
+```{r,eval=TRUE,echo=FALSE}
+chains<-1
+fn<-paste0('catchup_2a_',chains,'.rds')
+L<-readRDS(fn)
+info_blocks<-6
+
+Ntables<-length(L)/info_blocks
+
+ch<-L[[1]]
+bl<-L[[2]]
+hpm<-L[[3]]
+mt<-L[[4]]
+it<-L[[5]]
+```
+We want to create a confidence interval for a specifice choice of chains and backlog, given a number of iterations and max.time and hashpower. So we pick for example:
+
+* chains = `r ch`
+* backlog = `r bl-1`
+* hashpower miner = `r hpm`
+* max.time = `r as.integer(mt)`. Note that by setting max.time, we will *systematically* underestimate the **true** win chances.
+* iterations = `r it`.
+* repetitions = `r Ntables`
+
+***
+
+We repeat taking EWC to get some data. By the (weak) [Law of The Large Numbers](https://en.wikipedia.org/wiki/Law_of_large_numbers) we know that the average of EWC, for which we have simulation values, will converge in probability to it's expectation. We explore our EWC-data. First we take a peek at the data and visualize some characteristics of the data.
+
+Peek of the data:
+
+```{r,echo=FALSE,fig.width=7,fig.height=5}
+result<-L[info_blocks*seq(Ntables)]
+EWC<-c()
+for (ix in seq(Ntables)){
+  r<-unlist(result[[ix]])
+  count<-length(r[r!=0])
+  EWC<-c(EWC,count/length(r))
+}
+print(EWC[1:20])
+print(paste('number of data points:',length(EWC)))
+print(paste('mean EWC:',mean(EWC)))
+par(mfrow=c(2,2))
+hist(EWC,breaks=10,col='red',main='histogram of EWC',xlab='EWC')
+boxplot(EWC,col='red',width=10,main='boxplot of EWC',ylab='EWC')
+qqnorm(y=EWC,col='red',pch=16)
+```
+
+So, the distrubtion of EWC looks like a Normal Distribution.
+Let's do a formal [Kolmogorov-Smirnov](https://en.wikipedia.org/wiki/Kolmogorov%E2%80%93Smirnov_test) for normality.
+
+```{r,echo=FALSE,fig.width=7,fig.height=5}
+KT<-ks.test(EWC,'pnorm')
+print(KT)
+
+```
+We did `r ifelse(KT$p.value<=.05,'','not')` pass the Kolmogorov-Smirnov test. We can also apply a formal [Shapiro-Wilk test](https://en.wikipedia.org/wiki/Shapiro%E2%80%93Wilk_test) on normality of the distribution of EWC. The caviat is that Shapiro-Wilk test is known to be not accurate for large samples.
+
+```{r,echo=FALSE,fig.width=7,fig.height=5}
+ST<-shapiro.test(EWC)
+print(ST)
+
+```
+We did `r ifelse(ST$p.value<=.05,'','not')` pass the Shapiro-Wilk test. 
+
+So let's **stick to our (KS-test based) assumption** that EWC has a normal distribution with unknown mean and variance.
+
+```{r,echo=FALSE}
+N<-length(EWC)
+m<-mean(EWC)
+s<-sd(EWC)
+P1<-.95
+P2<-mean(c(1,P1))
+error <- qt(P2,df=N-1)*s/sqrt(N)
+left<-(m-error)
+right<-(m+error)
+```
+From our EWC-data (sample), we have:
+
+* sample mean: `r m`
+* sample standard deviation: `r s`
+
+So a `r P1` confidence interval becomes [ `r round(left,4)` ; `r round(right,4)` ]. We used [this](https://en.wikipedia.org/wiki/Normal_distribution#Estimation_of_parameters) procedure to come to this confidence interval.
+
+Note the interpretation: it doesn't mean that **for sure**, EWC is within these bounds. Correct interpretation: EWC will be within these bounds 95% for large enough samples.
+
+***
+

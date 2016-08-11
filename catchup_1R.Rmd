@@ -1,0 +1,288 @@
+---
+title: "CatchUp_1R"
+output: html_document
+date: "`r format(Sys.time(), '%a %b %d %X %Y')`"
+author: RZ
+
+note: run catchup_1.cpp first to create data
+---
+```{r,include=FALSE}
+rm(list=ls())
+gc()
+library(Rcpp)
+options(warn=-1)
+time.start<-proc.time()
+```
+Reference article is [Analysis of hash-rate double spending](https://arxiv.org/pdf/1402.2009.pdf)
+
+We simulate the situation where we have:
+
+a. one **attacker** and one (honest) **miner**
+b. a number of **chains** (of **blocks**)
+c. The **hashing power** for the miner is given by miner.hashpower in the range: 1,2,... 100. The hashing power of the attacker is: *attacker.hashpower = 100 - miner.hashpower*
+
+The attacker has a **backlog** of a certain number of blocks and has to **catch up** with the miner (backlog=0). We say: the attacker 'wins'.
+Since we simulate we have to define:
+
+d. a point in time to **stop trying to catch up** (max.time)
+e. a number of **iterations** (iterations) for the simulation. Increasing this number gives a better estimation of the attacker's expected win chance due to [Law of The Large Numbers](https://en.wikipedia.org/wiki/Law_of_large_numbers).
+
+```{r,echo=FALSE}
+#Earlier we found that
+#$\sum_{X_1=0}^{[t/2-B]} \sum_{X_2=X_1+B+1}^{t-X1} t!/X_1! * X_2! * (t-X_1-X_2) * p_1^X_1 * p_2^X_2 * p_3^(t-X_1-X_2)$
+```
+
+```{r simulate, echo=FALSE,evaluate=FALSE}
+simulate<-function(chains,backlog,max.time,miner.hashpower,iterations){
+  attacker.hashpower<-100 - miner.hashpower
+  miner.hashpower<-miner.hashpower/100
+  attacker.hashpower<-attacker.hashpower/100
+  catchup.times<-c()
+  catchup.succeeded.count<-catchup.fail.count<-0
+
+  for (ix.iteration in seq_len(iterations)){
+    situation.backlogs<-rep(backlog,chains)
+    miner.assign.chain<-sample(seq_len(chains),max.time,replace=TRUE) # chain for generated block miner
+    attacker.assign.chain<-sample(seq_len(chains),max.time,replace=TRUE) # chain for generated block attacker
+    miner.will.generate<-(runif(max.time)<=miner.hashpower) # will the miner generate?
+    attacker.will.generate<-(runif(max.time)<=attacker.hashpower) #will the attacker generate?
+
+    for (ix.time in seq.int(max.time)){
+          situation.backlogs[miner.assign.chain[ix.time]]<-
+            situation.backlogs[miner.assign.chain[ix.time]]+miner.will.generate[ix.time]
+          situation.backlogs[attacker.assign.chain[ix.time]]<-
+            situation.backlogs[attacker.assign.chain[ix.time]]-attacker.will.generate[ix.time]
+        catchup.succeed<-any(situation.backlogs<=0)
+        if (catchup.succeed){
+          catchup.succeeded.count<-catchup.succeeded.count+1
+          catchup.times<-c(catchup.times,ix.time)
+          break}
+    }
+    catchup.fail.count<-catchup.fail.count+1
+    if (catchup.fail.count>catchup.fail.limit) {break}
+  }
+  #return(list(catchup.succeeded.count,mean(catchup.times)))
+  return(c(catchup.succeeded.count,mean(catchup.times)))
+ 
+}
+```
+
+```{r,include=FALSE}
+test.mode<-FALSE # set to FALSE for large parameters
+if (test.mode) {
+  BL<-c(2,3)
+  HPM<-c(50,52)} else {
+  BL<-seq(2,7)
+  HPM<-seq(50,95,5)  
+}
+```
+
+
+```{r set parameters of the procedure,echo=TRUE,warning=FALSE,fig.width=8,fig.height=6}
+chains<-1
+max.time<-1000
+iterations<-30
+
+# procedure settings
+table.only<-TRUE # set this to FALSE to also show graphics
+catchup.fail.limit<-iterations%/%2 # used for speeding up iteration: if number of failed catchup exceeds catchup.fail.limit, we assume/expect that we see no more catchups and therefore we stop iteration
+```
+
+
+```{r info backlogs and haspowers miner,echo=FALSE}
+cat('backlogs in simulations:',BL)
+cat('hashpower miner in simulations:',HPM)
+```
+
+```{r c++ procedure,include=FALSE,echo=FALSE}
+chains <- 2
+max.time <- 10000
+iterations <- 1000
+test.mode<-FALSE # set to FALSE for large parameters
+if (test.mode) {
+  BL<-c(2,3)
+  HPM<-c(50,52)} else {
+  BL<-seq(2,7)
+  HPM<-seq(50,98,2)  
+}
+table.results<-matrix(nrow=length(HPM),ncol=length(BL),dimnames=list(sort(100-HPM),BL))
+for (miner.hashpower in HPM){
+  for (backlog in BL){
+    #table.results[as.character(100-miner.hashpower),as.character(backlog)]<-Csimulate(chains,backlog,max.time,miner.hashpower,iterations)} #save result in matrix
+  }
+}
+#print(table.results)
+
+```
+
+```{r procedure,echo=FALSE,eval=FALSE,warning=FALSE,fig.width=8,fig.height=6}
+table.results<-matrix(nrow=length(HPM),ncol=length(BL),dimnames=list(sort(100-HPM),BL))
+kleuren<-rep(c('red','green','blue','black','pink','purple','orange','grey'),3)
+
+for (miner.hashpower in HPM){
+
+  H.all<-list()
+  ix.kleur<-0
+  win.chances.all<-breaks.all<-c()
+  
+  for (backlog in BL){
+
+    par(mfrow=c(2,2))
+    par(new=FALSE)
+    ix.kleur<-ix.kleur+1
+    min.time <- backlog # note that the attacker can not win by definition if time<backlog
+    rep.factor <- max.time-min.time+1 # technical parameter to drive the lengths of the vectors for mcmapply
+    res<-mcmapply(simulate,rep(chains,rep.factor),rep(backlog,rep.factor),seq(min.time,max.time),rep(miner.hashpower,rep.factor),rep(iterations,rep.factor),SIMPLIFY = 'array')
+    wins<-res[1,]
+    catch.up<-res[2,]
+    
+    if (all(is.na(catch.up))) {
+      win.chances.last<-0
+    } else {
+      # er is tenminste een keer een catchup geweest
+          
+      #PLOT 1
+
+      H<-hist(catch.up,breaks=50,main='HISTOGRAM CATCHUP TIMES',xlab='time',ylab='freq',col='red',plot=!table.only)
+      win.chances<-cumsum(H$counts)/(rep.factor)
+      win.chances.last<-win.chances[length(win.chances)]
+
+      if (!table.only){
+
+        H.all<-c(H.all,list(miner.hashpower,backlog,H$breaks[2:length(H$breaks)],win.chances,kleuren[ix.kleur],sum(wins))) #save info
+    
+        #PLOT 2
+        plot(H$breaks[2:length(H$breaks)],win.chances,main='CUM CHANCE CATCHUP TIMES',xlab='time',ylab='cum chance',col='red',type='h')
+        abline(h = seq(0.1,1,.1), lty = 2)
+
+        breaks.last<-H$breaks[length(H$breaks)]
+        breaks.all<-c(breaks.all,breaks.last) #for overview usage
+    
+        #PLOT 3
+        plot(H$breaks[2:length(H$breaks)],win.chances,main='WIN CHANCES',xlab='time',ylab='win.chances',col='green',type='s')
+        abline(h = seq(0.1,1,.1), lty = 2)
+        title(main=paste('\nbacklog:',backlog,'; HP_miner:',miner.hashpower),outer=TRUE)
+        par(new=FALSE)}
+      }
+    win.chances.all<-c(win.chances.all,win.chances.last)
+    table.results[as.character(100-miner.hashpower),as.character(backlog)]<-win.chances.last #save result in matrix
+  }
+  
+  #OVERVIEW
+  if (length(breaks.all!=0) & !table.only) { #
+    plot.new
+    par(mfrow=c(1,1))
+    IX.H<-seq(3,by=6,length.out=length(BL)) # max. number of H's
+    IX.H<-IX.H[IX.H<length(H.all)] #limited to actual number of H's
+  
+    breaks.max<-max(breaks.all)
+    win.chances.max<-max(win.chances.all)
+    X<-c(0,breaks.max)
+    Y<-c(0,win.chances.max)
+    plot(X,Y,xlab='time',ylab='win chance',xlim=X,ylim=Y,type='n') #setup frame
+  
+    legend.string<-legend.kleur<-c()
+    ix.wc<-0
+    for (ix.H in IX.H){
+      ix.wc<-ix.wc+1
+      points(H.all[[ix.H]][1:length(H.all[[ix.H]])],H.all[[ix.H+1]],col=H.all[[ix.H+2]],type='s',xlab='',ylab='')
+      abline(h = seq(0,1,.1), lty = 2)
+      legend.string<-c(legend.string,H.all[[ix.H-1]])
+      legend.kleur<-c(legend.kleur,H.all[[ix.H+2]])
+    }
+    legend('topright',legend=legend.string,col=legend.kleur,lwd=2,title='backlog')
+    title(main=paste('\n\nWIN CHANCE ATTACKER\nHP_miner:',H.all[[1]]),outer=TRUE)
+  }
+}
+```
+
+```{r,eval=FALSE}
+for (miner.hashpower in HPM){
+
+  H.all<-list()
+  ix.kleur<-0
+  win.chances.all<-breaks.all<-c()
+  
+  for (backlog in BL){
+
+    par(mfrow=c(2,2))
+    par(new=FALSE)
+    ix.kleur<-ix.kleur+1
+    min.time <- backlog # note that the attacker can not win by definition if time<backlog
+    rep.factor <- max.time-min.time+1 # technical parameter to drive the lengths of the vectors for mcmapply
+    res<-mcmapply(simulate,rep(chains,rep.factor),rep(backlog,rep.factor),seq(min.time,max.time),rep(miner.hashpower,rep.factor),rep(iterations,rep.factor),SIMPLIFY = 'array')
+    wins<-res[1,]
+    catch.up<-res[2,]
+    
+    if (all(is.na(catch.up))) {
+      win.chances.last<-0
+    } else {
+      # er is tenminste een keer een catchup geweest
+          
+      #PLOT 1
+
+      H<-hist(catch.up,breaks=50,main='HISTOGRAM CATCHUP TIMES',xlab='time',ylab='freq',col='red',plot=!table.only)
+      win.chances<-cumsum(H$counts)/(rep.factor)
+      win.chances.last<-win.chances[length(win.chances)]
+
+      if (!table.only){
+
+        H.all<-c(H.all,list(miner.hashpower,backlog,H$breaks[2:length(H$breaks)],win.chances,kleuren[ix.kleur],sum(wins))) #save info
+    
+        #PLOT 2
+        plot(H$breaks[2:length(H$breaks)],win.chances,main='CUM CHANCE CATCHUP TIMES',xlab='time',ylab='cum chance',col='red',type='h')
+        abline(h = seq(0.1,1,.1), lty = 2)
+
+        breaks.last<-H$breaks[length(H$breaks)]
+        breaks.all<-c(breaks.all,breaks.last) #for overview usage
+    
+        #PLOT 3
+        plot(H$breaks[2:length(H$breaks)],win.chances,main='WIN CHANCES',xlab='time',ylab='win.chances',col='green',type='s')
+        abline(h = seq(0.1,1,.1), lty = 2)
+        title(main=paste('\nbacklog:',backlog,'; HP_miner:',miner.hashpower),outer=TRUE)
+        par(new=FALSE)}
+      }
+    win.chances.all<-c(win.chances.all,win.chances.last)
+    table.results[as.character(100-miner.hashpower),as.character(backlog)]<-win.chances.last #save result in matrix
+  }
+  
+  #OVERVIEW
+  if (length(breaks.all!=0) & !table.only) { #
+    plot.new
+    par(mfrow=c(1,1))
+    IX.H<-seq(3,by=6,length.out=length(BL)) # max. number of H's
+    IX.H<-IX.H[IX.H<length(H.all)] #limited to actual number of H's
+  
+    breaks.max<-max(breaks.all)
+    win.chances.max<-max(win.chances.all)
+    X<-c(0,breaks.max)
+    Y<-c(0,win.chances.max)
+    plot(X,Y,xlab='time',ylab='win chance',xlim=X,ylim=Y,type='n') #setup frame
+  
+    legend.string<-legend.kleur<-c()
+    ix.wc<-0
+    for (ix.H in IX.H){
+      ix.wc<-ix.wc+1
+      points(H.all[[ix.H]][1:length(H.all[[ix.H]])],H.all[[ix.H+1]],col=H.all[[ix.H+2]],type='s',xlab='',ylab='')
+      abline(h = seq(0,1,.1), lty = 2)
+      legend.string<-c(legend.string,H.all[[ix.H-1]])
+      legend.kleur<-c(legend.kleur,H.all[[ix.H+2]])
+    }
+    legend('topright',legend=legend.string,col=legend.kleur,lwd=2,title='backlog')
+    title(main=paste('\n\nWIN CHANCE ATTACKER\nHP_miner:',H.all[[1]]),outer=TRUE)
+  }
+}
+```
+
+`r paste('CONVERGENCE TABLE (',iterations,'ITERATIONS )')`
+```{r show table,echo=FALSE}
+print(table.results)
+```
+
+`r "rows contain haspower.attacker (Rosenfeld's q) and columns contain backlog values"`
+
+`r 'simulation time:'`
+```{r show simulation time,echo=FALSE}
+time.end<-proc.time()
+print(time.end-time.start)
+```

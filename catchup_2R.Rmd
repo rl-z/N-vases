@@ -1,0 +1,254 @@
+---
+title: "CatchUp_2R"
+output: html_document
+date: "`r format(Sys.time(), '%a %b %d %X %Y')`"
+author: RZ
+
+note: run catchup_2.cpp first to create data
+---
+```{r,include=FALSE}
+rm(list=ls())
+gc()
+options(warn=-1)
+time.start<-proc.time()
+```
+Reference article is [Analysis of hash-rate double spending](https://arxiv.org/pdf/1402.2009.pdf)
+
+We simulate the situation where we have:
+
+a. one **attacker** and one (honest) **miner**
+b. a number of **chains** (of **blocks**)
+c. The **hashing power** for the miner is given by miner.hashpower in the range: 1,2,... 100. The hashing power of the attacker is: *attacker.hashpower = 100 - miner.hashpower*
+
+The attacker has a **backlog** of a certain number of blocks and has to **catch up** with the miner (backlog=0). We say: the attacker 'wins'.
+Since we simulate we have to define:
+
+d. a point in time to **stop trying to catch up** (max.time)
+e. a number of **iterations** (iterations) for the simulation. Increasing this number gives a better estimation of the attacker's expected win chance due to [Law of The Large Numbers](https://en.wikipedia.org/wiki/Law_of_large_numbers).
+
+```{r,echo=FALSE}
+gc()
+rm(list=ls())
+#Earlier we found that
+#$\sum_{X_1=0}^{[t/2-B]} \sum_{X_2=X_1+B+1}^{t-X1} t!/X_1! * X_2! * (t-X_1-X_2) * p_1^X_1 * p_2^X_2 * p_3^(t-X_1-X_2)$
+```
+
+```{r procedure,eval=FALSE,echo=FALSE,warning=FALSE,fig.width=8,fig.height=6}
+table.results<-matrix(nrow=length(HPM),ncol=length(BL),dimnames=list(sort(100-HPM),BL))
+kleuren<-rep(c('red','green','blue','black','pink','purple','orange','grey'),3)
+
+for (miner.hashpower in HPM){
+
+  H.all<-list()
+  ix.kleur<-0
+  win.chances.all<-breaks.all<-c()
+  
+  for (backlog in BL){
+
+    par(mfrow=c(2,2))
+    par(new=FALSE)
+    ix.kleur<-ix.kleur+1
+    min.time <- backlog # note that the attacker can not win by definition if time<backlog
+    rep.factor <- max.time-min.time+1 # technical parameter to drive the lengths of the vectors for mcmapply
+    res<-mcmapply(simulate,rep(chains,rep.factor),rep(backlog,rep.factor),seq(min.time,max.time),rep(miner.hashpower,rep.factor),rep(iterations,rep.factor),SIMPLIFY = 'array')
+    wins<-res[1,]
+    catch.up<-res[2,]
+    
+    if (all(is.na(catch.up))) {
+      win.chances.last<-0
+    } else {
+      # er is tenminste een keer een catchup geweest
+          
+      #PLOT 1
+
+      H<-hist(catch.up,breaks=50,main='HISTOGRAM CATCHUP TIMES',xlab='time',ylab='freq',col='red',plot=!table.only)
+      win.chances<-cumsum(H$counts)/(rep.factor)
+      win.chances.last<-win.chances[length(win.chances)]
+
+      if (!table.only){
+
+        H.all<-c(H.all,list(miner.hashpower,backlog,H$breaks[2:length(H$breaks)],win.chances,kleuren[ix.kleur],sum(wins))) #save info
+    
+        #PLOT 2
+        plot(H$breaks[2:length(H$breaks)],win.chances,main='CUM CHANCE CATCHUP TIMES',xlab='time',ylab='cum chance',col='red',type='h')
+        abline(h = seq(0.1,1,.1), lty = 2)
+
+        breaks.last<-H$breaks[length(H$breaks)]
+        breaks.all<-c(breaks.all,breaks.last) #for overview usage
+    
+        #PLOT 3
+        plot(H$breaks[2:length(H$breaks)],win.chances,main='WIN CHANCES',xlab='time',ylab='win.chances',col='green',type='s')
+        abline(h = seq(0.1,1,.1), lty = 2)
+        title(main=paste('\nbacklog:',backlog,'; HP_miner:',miner.hashpower),outer=TRUE)
+        par(new=FALSE)}
+      }
+    win.chances.all<-c(win.chances.all,win.chances.last)
+    table.results[as.character(100-miner.hashpower),as.character(backlog)]<-win.chances.last #save result in matrix
+  }
+  
+  #OVERVIEW
+  if (length(breaks.all!=0) & !table.only) { #
+    plot.new
+    par(mfrow=c(1,1))
+    IX.H<-seq(3,by=6,length.out=length(BL)) # max. number of H's
+    IX.H<-IX.H[IX.H<length(H.all)] #limited to actual number of H's
+  
+    breaks.max<-max(breaks.all)
+    win.chances.max<-max(win.chances.all)
+    X<-c(0,breaks.max)
+    Y<-c(0,win.chances.max)
+    plot(X,Y,xlab='time',ylab='win chance',xlim=X,ylim=Y,type='n') #setup frame
+  
+    legend.string<-legend.kleur<-c()
+    ix.wc<-0
+    for (ix.H in IX.H){
+      ix.wc<-ix.wc+1
+      points(H.all[[ix.H]][1:length(H.all[[ix.H]])],H.all[[ix.H+1]],col=H.all[[ix.H+2]],type='s',xlab='',ylab='')
+      abline(h = seq(0,1,.1), lty = 2)
+      legend.string<-c(legend.string,H.all[[ix.H-1]])
+      legend.kleur<-c(legend.kleur,H.all[[ix.H+2]])
+    }
+    legend('topright',legend=legend.string,col=legend.kleur,lwd=2,title='backlog')
+    title(main=paste('\n\nWIN CHANCE ATTACKER\nHP_miner:',H.all[[1]]),outer=TRUE)
+  }
+}
+  #OVERVIEW
+  if (length(breaks.all!=0) & !table.only) { #
+    plot.new
+    par(mfrow=c(1,1))
+    IX.H<-seq(3,by=6,length.out=length(BL)) # max. number of H's
+    IX.H<-IX.H[IX.H<length(H.all)] #limited to actual number of H's
+  
+    breaks.max<-max(breaks.all)
+    win.chances.max<-max(win.chances.all)
+    X<-c(0,breaks.max)
+    Y<-c(0,win.chances.max)
+    plot(X,Y,xlab='time',ylab='win chance',xlim=X,ylim=Y,type='n') #setup frame
+  
+    legend.string<-legend.kleur<-c()
+    ix.wc<-0
+    for (ix.H in IX.H){
+      ix.wc<-ix.wc+1
+      points(H.all[[ix.H]][1:length(H.all[[ix.H]])],H.all[[ix.H+1]],col=H.all[[ix.H+2]],type='s',xlab='',ylab='')
+      abline(h = seq(0,1,.1), lty = 2)
+      legend.string<-c(legend.string,H.all[[ix.H-1]])
+      legend.kleur<-c(legend.kleur,H.all[[ix.H+2]])
+    }
+    legend('topright',legend=legend.string,col=legend.kleur,lwd=2,title='backlog')
+    title(main=paste('\n\nWIN CHANCE ATTACKER\nHP_miner:',H.all[[1]]),outer=TRUE)
+  }
+}
+
+```
+
+```{r,eval=FALSE,echo=FALSE,fig.width=10,fig.height=10}
+chains<-1
+info_blocks<-9
+par(mfrow=c(2,2))
+fn<-paste0('blockchain_simulation_2_',chains,'.rds')
+L<-readRDS(fn)
+lcu<-c()
+Ntables<-length(L)/info_blocks
+par(mfrow=c(2,2))
+
+for (n in info_blocks*seq(0,Ntables-1)) {
+  ch<-L[[n+1]]
+  bl<-L[[n+2]]
+  hpm<-L[[n+3]]
+  mt<-L[[n+4]]
+  it<-L[[n+5]]
+  cu<-L[[n+6]]
+  lcu<-c(lcu,cu)
+  sz<-L[[n+7]]
+  frst<-L[[n+8]]
+  counts<-L[[n+9]]
+  mids<-seq(from=frst,step=sz,length.out=length(counts))
+  ms<-paste('HP miner:',hpm,'; backlog:',bl-1,'; chains:',32)
+  ss<-paste('\ncatched up:',cu,'%; iterations:',it,'\nmax.time:',mt)
+  barplot(counts,col='red',width=10,main=ms,sub=ss,names.arg=mids)
+
+}
+
+par(mfrow=c(1,1))
+plot(lcu,type='l',col='green',main='catchups as a function of backlog',xlab='backlog',ylab='percentage catched up',lwd=5)
+```
+
+```{r,echo=FALSE}
+chains<-32
+backlog<-5
+hp_miner<-70
+```
+
+We choose one *crosshair-example* to see how the limit value depends on max.time and iterations
+
+* chains = `r chains`
+* backlog = `r backlog`
+* hashpower miner = `r hp_miner`
+
+In the table below:
+
+* rows are varying iterations
+* columns are varying max.times
+
+```{r,echo=FALSE,fig.width=7,fig.height=7}
+info_blocks<-9
+
+fn<-paste0('catchup_2_',chains,'.rds')
+
+L<-readRDS(fn)
+lcu<-lmt<-lit<-c()
+Ntables<-length(L)/info_blocks
+vals.size<-sqrt(Ntables)
+vals=matrix(nrow=vals.size,ncol=vals.size)
+
+for (n in info_blocks*seq(0,Ntables-1)) {
+  ch<-L[[n+1]]
+  bl<-L[[n+2]]
+  hpm<-L[[n+3]]
+  mt<-L[[n+4]]
+  it<-L[[n+5]]
+  cu<-L[[n+6]]
+  sz<-L[[n+7]]
+  frst<-L[[n+8]]
+  counts<-L[[n+9]]
+  lcu<-c(lcu,cu)
+  lmt<-c(lmt,mt)
+  lit<-c(lit,it)
+
+  #print(paste(it,mt))
+  mids<-seq(from=frst,step=sz,length.out=length(counts))
+  vals[it/100,mt/1000]<-round(cu/it,3)
+  ms<-paste('HP miner:',hpm,'; backlog:',bl-1,'; chains:',chains)
+  ss<-paste('\ncatched up:',cu,'%; iterations:',it,'\nmax.time:',mt)
+
+
+}
+
+lit<-sort(unique(lit))
+lmt<-sort(unique(lmt))
+vals2<-round(vals,4)
+dimnames(vals2)<-list(lit,lmt)
+print(vals2)
+
+par(mfrow=c(1,2))
+ms<-'impact max.time on win chance'
+yls<-'win chance values'
+
+plot(lit,vals[,vals.size],typ='l',col='red',lwd=5,xlab='iterations',ylab=yls,sub=paste('max.time:',mt),main=ms)
+grid(vals.size+1)
+
+plot(lmt,vals[vals.size,],typ='l',col='red',lwd=5,xlab='max.time',ylab=yls,sub=paste('iterations:',it),main=ms)
+grid(vals.size+1)
+
+par(mfrow=c(1,1))
+ms<-'joint impact max.time and iterations\n on win chance values'
+persp(seq_len(vals.size)*100,seq_len(vals.size)*1000,round(vals,3),col='red',theta=45,phi=30,ticktype='detailed',ylab='max.time',xlab='iterations',zlab='win chance values',main=ms)
+
+N<-1+vals.size%/%2
+zoom<-seq(N,vals.size)
+persp(zoom*100,zoom*1000,round(vals[zoom,zoom],3),col='red',theta=45,phi=30,ticktype='detailed',ylab='max.time',xlab='iterations',zlab='win chance values',main=ms)
+
+```
+
+The second 3d plot is a zoom of the (right upper part of the) first one.
+
