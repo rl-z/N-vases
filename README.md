@@ -5,7 +5,9 @@ Since there seems not to be a closed analytical solution to this problem, this s
 
 # Input (from keyboard)
 number of experiments (integer; >0)
+
 haspower miner (real number; >0 & <1)
+
 time limit (integer; >0)
 
 backlog (integer; >=0)
